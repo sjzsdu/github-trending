@@ -9,3 +9,6 @@ dist/
 data/snapshots/*.json
 artifacts/
 archive.db
+
+# 平台登录态（cookie/localStorage，含凭据，绝不入库）
+profiles/

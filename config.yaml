@@ -52,10 +52,11 @@ angles:
       场景须与项目定位一致，并明确标注哪些属于想象而非项目文档内容。
 
 llm:
-  # OpenAI 兼容端点。以下字段均可被环境变量覆盖：
-  #   GHTREND_LLM_BASE_URL / GHTREND_LLM_API_KEY / GHTREND_LLM_MODEL
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
+  # OpenAI 兼容端点（真实调用为默认路径，--mock-llm 仅用于离线测试）。
+  # key 只走环境变量，不入库：
+  #   GHTREND_LLM_API_KEY > DEEPSEEK_API_KEY > DASHSCOPE_API_KEY > OPENAI_API_KEY
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
   temperature: 0.7
   max_tokens: 4096
 
@@ -68,3 +69,24 @@ scrape:
   base_url: https://github.com/trending
   user_agent: ghtrend-bot/0.1 (+https://github.com/sjzsdu/github-trending)
   timeout_seconds: 20
+
+publish:
+  # run 命令自动发布的平台与顺序（自动发布；单平台手动见 CLI login/check/publish）
+  platforms: [juejin]
+  # draft = 只进草稿箱（默认，人工确认后再发）；publish = 真实发布。CLI --mode 可覆盖单次
+  mode: draft
+  # 平台间发布间隔秒数；风控要求 ≥300（F4），配置更小会被强制抬到 300
+  interval_seconds: 300
+  # 登录态浏览器 profile 根目录（含 cookie/登录态，已 gitignore，禁止入库）
+  profiles_dir: profiles
+  juejin:
+    editor_url: https://juejin.cn/editor/draft/new
+    # 发布弹窗选择的分类（掘金要求必选一项）
+    category: 前端
+    # 最多选择的标签数（掘金上限 3 个）
+    max_tags: 3
+    # 勾选“AI 生成内容”相关声明（GB 45438-2025，F5）
+    ai_declaration: true
+
+toutiao:
+  editor_url: https://mp.toutiao.com/profile_v4/graphic/publish

@@ -72,11 +72,18 @@ def mock_body(topic: SelectedTopic, details: RepoDetails, angle: dict) -> str:
 
 
 def call_llm(cfg: dict, messages: list[dict]) -> str:
-    """调用 OpenAI 兼容 /chat/completions。api_key/base_url/model 见 config.py 的 env 覆盖。"""
+    """调用 OpenAI 兼容 /chat/completions（真实生成路径）。
+
+    key 经 config.resolve_llm_key 回退链解析；未配置时 fail-fast 并给出
+    可操作提示（离线测试用 --mock-llm）。
+    """
+    from .config import require_llm_key
+
     llm = cfg["llm"]
+    api_key = require_llm_key(cfg)
     resp = requests.post(
         llm["base_url"].rstrip("/") + "/chat/completions",
-        headers={"Authorization": f"Bearer {llm['api_key']}"},
+        headers={"Authorization": f"Bearer {api_key}"},
         json={
             "model": llm["model"],
             "messages": messages,
@@ -98,6 +105,7 @@ def make_article(
 ) -> Article:
     """生成一篇文章对象（body 来自 LLM 或 mock）。"""
     angle = find_angle(cfg, topic.angle)
+    repo_url = details.url or f"https://github.com/{details.repo}"
     if mock:
         body = mock_body(topic, details, angle)
     else:
@@ -119,7 +127,7 @@ def make_article(
         body=(
             body.strip()
             + "\n\n---\n\n"
-            + f"**来源仓库**：[{details.repo}]({details.url})\n\n"
+            + f"**来源仓库**：[{details.repo}]({repo_url})\n\n"
             + f"> {AI_DISCLOSURE}\n"
         ),
         meta={"times_trending": topic.times_trending, "mock": mock},

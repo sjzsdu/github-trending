@@ -76,21 +76,23 @@ def enrich_repo(repo: str, *, api_base: str = "https://api.github.com", timeout:
     meta = _get(session, f"{base}/repos/{repo}", timeout)
     if meta is None:
         details.warnings.append("metadata fetch failed (rate limit or network)")
-        return details
-    data = meta.json()
-    details.url = data.get("html_url", f"https://github.com/{repo}")
-    details.description = data.get("description") or ""
-    details.stars = data.get("stargazers_count", 0)
-    details.forks = data.get("forks_count", 0)
-    details.open_issues = data.get("open_issues_count", 0)
-    details.created_at = data.get("created_at", "")
-    details.pushed_at = data.get("pushed_at", "")
-    details.language = data.get("language") or ""
-    details.homepage = data.get("homepage") or ""
-    details.topics = data.get("topics", []) or []
-    details.default_branch = data.get("default_branch", "main")
-    lic = data.get("license") or {}
-    details.license = lic.get("spdx_id") or lic.get("name") or ""
+        # 不 early-return：README/树走独立回退路径，尽量补齐材料
+        details.default_branch = "main"
+    else:
+        data = meta.json()
+        details.url = data.get("html_url", f"https://github.com/{repo}")
+        details.description = data.get("description") or ""
+        details.stars = data.get("stargazers_count", 0)
+        details.forks = data.get("forks_count", 0)
+        details.open_issues = data.get("open_issues_count", 0)
+        details.created_at = data.get("created_at", "")
+        details.pushed_at = data.get("pushed_at", "")
+        details.language = data.get("language") or ""
+        details.homepage = data.get("homepage") or ""
+        details.topics = data.get("topics", []) or []
+        details.default_branch = data.get("default_branch", "main")
+        lic = data.get("license") or {}
+        details.license = lic.get("spdx_id") or lic.get("name") or ""
 
     readme = _get(
         session, f"{base}/repos/{repo}/readme", timeout, headers=_headers(raw=True)
@@ -98,7 +100,15 @@ def enrich_repo(repo: str, *, api_base: str = "https://api.github.com", timeout:
     if readme is not None:
         details.readme = readme.text
     else:
-        details.warnings.append("readme fetch failed")
+        # API 限流/失败时走 raw 回退（独立限额，且无需认证）
+        for name in ("README.md", "readme.md", "README.zh-CN.md"):
+            raw = _get(session, f"https://raw.githubusercontent.com/{repo}/HEAD/{name}",
+                       timeout, headers={"Accept": "text/plain"})
+            if raw is not None:
+                details.readme = raw.text
+                break
+        if not details.readme:
+            details.warnings.append("readme fetch failed")
 
     tree = _get(session, f"{base}/repos/{repo}/git/trees/{details.default_branch}", timeout)
     if tree is not None:

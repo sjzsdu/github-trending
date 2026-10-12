@@ -39,10 +39,10 @@ class FakeResponse:
 
 
 class FlakeyReadmeSession:
-    """元数据/树正常返回，README 拉取抛连接异常（模拟瞬时超时/重置）。"""
+    """元数据/树正常返回，README 拉取抛连接异常（API 与 raw 回退都失败）。"""
 
     def get(self, url, headers=None, timeout=None):
-        if url.endswith("/readme"):
+        if "/readme" in url or "raw.githubusercontent" in url:
             raise requests.ConnectionError("connection reset by peer")
         if url.endswith("/git/trees/main"):
             return FakeResponse(TREE)

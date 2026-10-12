@@ -122,6 +122,15 @@ def step_select(cfg: dict, workspace: Path, limit: int) -> str:
     )
 
 
+def _find_in_snapshots(snapshots_dir: Path, repo: str):
+    """REST 限流时的兜底：从最新到最旧扫快照，返回该 repo 的 trending 条目。"""
+    for f in sorted(snapshots_dir.glob("*.json"), reverse=True):
+        for r in scrape_mod.load_snapshot(f):
+            if r.repo == repo:
+                return r
+    return None
+
+
 def step_enrich(cfg: dict, workspace: Path, *, mock: bool) -> str:
     """为选中 repo 拉取 GitHub REST 元数据 + README（结果缓存，幂等）。"""
     state = _load_state(cfg, workspace)
@@ -140,6 +149,16 @@ def step_enrich(cfg: dict, workspace: Path, *, mock: bool) -> str:
                 api_base=cfg["enrich"]["api_base"],
                 timeout=cfg["enrich"]["timeout_seconds"],
             )
+            if any("metadata fetch failed" in w for w in details.warnings):
+                snap = _find_in_snapshots(workspace / cfg["paths"]["snapshots"], topic.repo)
+                if snap:
+                    details.url = details.url or snap.url
+                    details.description = details.description or snap.description
+                    details.stars = details.stars or snap.stars
+                    details.language = details.language or snap.language
+                    details.warnings.append(
+                        "metadata supplemented from trending snapshot (GitHub REST rate-limited)"
+                    )
         path = enrich_mod.save_details(details, out_dir)
         lines.append(f"{topic.repo}: {len(details.readme)} chars readme -> {path.relative_to(workspace)}"
                      + (f" (warnings: {', '.join(details.warnings)})" if details.warnings else ""))
