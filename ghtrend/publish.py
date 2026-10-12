@@ -203,7 +203,7 @@ class JuejinAdapter:
         page.wait_for_timeout(1000)
 
         if payload["mode"] == "draft":
-            btn = page.get_by_role("button", name="保存草稿")
+            btn = page.get_by_role("button", name="保存草稿", exact=True)
             if btn.count() == 0:
                 btn = page.locator("button", has_text="保存草稿")
             btn.first.click()
@@ -211,7 +211,7 @@ class JuejinAdapter:
             return "draft saved"
 
         # publish：打开发布弹窗
-        btn = page.get_by_role("button", name="发布文章")
+        btn = page.get_by_role("button", name="发布文章", exact=True)
         if btn.count() == 0:
             btn = page.locator("button", has_text="发布文章")
         btn.first.click()
@@ -259,7 +259,7 @@ class JuejinAdapter:
                 # 找不到声明勾选项时不阻塞，但显式留痕以便人工复核
                 payload["ai_declaration_checked"] = False
 
-        page.get_by_role("button", name="发布").first.click()
+        page.get_by_role("button", name="发布", exact=True).first.click()
         page.wait_for_timeout(3000)
         return "published"
 
