@@ -1,0 +1,70 @@
+# GitHub Trending 解读流水线配置
+# 命令行/环境变量可覆盖大部分字段，见 README.md
+
+languages:
+  - python
+  - go
+  - rust
+  - typescript
+
+periods:
+  - daily
+  # - weekly
+  # - monthly
+
+paths:
+  snapshots: data/snapshots
+  archive_db: archive.db
+  artifacts: artifacts
+  payloads: artifacts/payloads
+
+limits:
+  # 每日最大生成文章数（LLM token / 平台风控预算）
+  daily_articles: 2
+  # 每次 pipeline 最多选取的 repo 数（CLI --limit 覆盖此值）
+  select_limit: 1
+  # 抓取请求间隔秒数（礼貌限速）
+  fetch_interval_seconds: 3
+  # 送入 LLM 前对 README 的最大字符数截断
+  max_readme_chars: 12000
+
+angles:
+  - id: intro
+    name: 入门介绍
+    prompt: |
+      面向第一次接触该项目的开发者写一篇入门介绍：项目是什么、解决什么问题、
+      5 分钟上手步骤（安装 + 最小示例）、适合谁。禁止编造输入材料中不存在的事实或数字。
+  - id: architecture
+    name: 架构精讲
+    prompt: |
+      面向有经验的工程师精讲该项目架构：核心模块划分、数据流、关键技术选型，
+      并给出一块 mermaid（graph TD）图展示模块关系。只基于提供的 README 与目录树推断，
+      推断处须标注“（据目录结构推断）”。
+  - id: success_story
+    name: 成功故事
+    prompt: |
+      讲述该项目如何获得社区关注。只引用输入元数据中可核验的事实
+      （star 数、fork 数、创建时间、issue 数等），叙事克制，不做无依据的归因。
+  - id: use_case
+    name: 用途想象
+    prompt: |
+      想象该项目在真实业务中的 3 个落地场景，每个场景说明“为什么适合 + 如何开始”。
+      场景须与项目定位一致，并明确标注哪些属于想象而非项目文档内容。
+
+llm:
+  # OpenAI 兼容端点。以下字段均可被环境变量覆盖：
+  #   GHTREND_LLM_BASE_URL / GHTREND_LLM_API_KEY / GHTREND_LLM_MODEL
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  temperature: 0.7
+  max_tokens: 4096
+
+enrich:
+  # GitHub REST；token 从环境变量 GHTREND_GITHUB_TOKEN 读取，缺省走未认证限额
+  api_base: https://api.github.com
+  timeout_seconds: 15
+
+scrape:
+  base_url: https://github.com/trending
+  user_agent: ghtrend-bot/0.1 (+https://github.com/sjzsdu/github-trending)
+  timeout_seconds: 20
