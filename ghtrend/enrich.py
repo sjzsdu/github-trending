@@ -24,9 +24,11 @@ def _headers(raw: bool = False) -> dict[str, str]:
     return h
 
 
-def _get(session: requests.Session, url: str, timeout: float) -> requests.Response | None:
+def _get(
+    session: requests.Session, url: str, timeout: float, headers: dict[str, str] | None = None
+) -> requests.Response | None:
     try:
-        resp = session.get(url, headers=_headers(), timeout=timeout)
+        resp = session.get(url, headers=headers or _headers(), timeout=timeout)
         if resp.status_code == 200:
             return resp
         return None
@@ -90,10 +92,10 @@ def enrich_repo(repo: str, *, api_base: str = "https://api.github.com", timeout:
     lic = data.get("license") or {}
     details.license = lic.get("spdx_id") or lic.get("name") or ""
 
-    readme = session.get(
-        f"{base}/repos/{repo}/readme", headers=_headers(raw=True), timeout=timeout
+    readme = _get(
+        session, f"{base}/repos/{repo}/readme", timeout, headers=_headers(raw=True)
     )
-    if readme.status_code == 200:
+    if readme is not None:
         details.readme = readme.text
     else:
         details.warnings.append("readme fetch failed")
@@ -120,8 +122,3 @@ def save_details(details: RepoDetails, out_dir: str | Path) -> Path:
         json.dumps(details.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return path
-
-
-def load_details(path: str | Path) -> RepoDetails:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return RepoDetails(**data)

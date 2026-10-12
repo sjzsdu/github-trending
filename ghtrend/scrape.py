@@ -139,13 +139,6 @@ def write_snapshot(
     return path
 
 
-def latest_snapshot(snapshots_dir: str | Path) -> Path | None:
-    """返回最新一份快照文件（按文件名排序，文件名以时间戳开头）。"""
-    d = Path(snapshots_dir)
-    files = sorted(d.glob("*.json"))
-    return files[-1] if files else None
-
-
 def load_snapshot(path: str | Path) -> list[TrendingRepo]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return [TrendingRepo(**r) for r in payload["repos"]]

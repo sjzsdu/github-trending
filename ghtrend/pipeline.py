@@ -59,12 +59,11 @@ def _load_state(cfg: dict, workspace: Path) -> dict:
     return state
 
 
-def step_fetch(cfg: dict, workspace: Path, *, mock: bool, limit_langs: int | None = None) -> str:
+def step_fetch(cfg: dict, workspace: Path, *, mock: bool) -> str:
     """抓取各语言 × 周期，写 JSON 快照。"""
     scrape_cfg = cfg["scrape"]
-    langs = cfg["languages"][: limit_langs or None]
     written = []
-    for lang in langs:
+    for lang in cfg["languages"]:
         for period in cfg["periods"]:
             captured_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
             html = scrape_mod.fetch_trending(
@@ -95,7 +94,17 @@ def step_archive(cfg: dict, workspace: Path) -> str:
 
 
 def step_select(cfg: dict, workspace: Path, limit: int) -> str:
-    """归档里选题（去重 + 角度轮换），写 artifacts/selection.json。"""
+    """归档里选题（去重 + 角度轮换），写 artifacts/selection.json。
+
+    limit 受 limits.daily_articles 约束：当日已生成文章数会占用每日预算，
+    预算耗尽则本步不产生新选题（提高 limit 也无法突破）。
+    """
+    daily_budget = int(cfg["limits"].get("daily_articles", limit))
+    made_today = len(list((workspace / cfg["paths"]["artifacts"]).glob(f"{_dt.date.today().isoformat()}/*.md")))
+    limit = max(0, min(limit, daily_budget - made_today))
+    if limit == 0:
+        return (f"daily article budget exhausted ({made_today}/{daily_budget} generated today); "
+                "no new topics selected")
     conn = archive_mod.connect(workspace / cfg["paths"]["archive_db"])
     try:
         topics = archive_mod.select_topics(conn, cfg["angles"], limit=limit)
