@@ -15,6 +15,9 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.scripts]
+ghtrend = "ghtrend.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 # 真实发布（掘金等）：playwright install chromium

@@ -7,19 +7,42 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from .models import Article, PlatformVariant, PublishResult
 
 # 平台规格：标题字数上限 / 标签上限 / 摘要字数上限（用于变体差异化）
+# mermaid: 平台 markdown 是否原生渲染 mermaid；False 则把图块换成渲染好的图片链接
 PLATFORM_SPECS: dict[str, dict] = {
-    "juejin": {"title_max": 50, "tags_max": 5, "summary_max": 100, "suffix": "｜开源项目实战"},
-    "toutiao": {"title_max": 30, "tags_max": 3, "summary_max": 80, "suffix": ""},
-    "zhihu": {"title_max": 60, "tags_max": 5, "summary_max": 120, "suffix": ""},
-    "csdn": {"title_max": 40, "tags_max": 5, "summary_max": 100, "suffix": ""},
+    "juejin": {"title_max": 50, "tags_max": 5, "summary_max": 100, "suffix": "｜开源项目实战", "mermaid": True},
+    "toutiao": {"title_max": 30, "tags_max": 3, "summary_max": 80, "suffix": "", "mermaid": False},
+    "zhihu": {"title_max": 60, "tags_max": 5, "summary_max": 120, "suffix": "", "mermaid": False},
+    "csdn": {"title_max": 40, "tags_max": 5, "summary_max": 100, "suffix": "", "mermaid": True},
 }
+
+_MERMAID_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
+
+
+def mermaid_block_to_image_url(code: str) -> str:
+    """mermaid 图定义 -> mermaid.ink 免费渲染的 PNG 链接（无需本地依赖）。"""
+    state = json.dumps({"code": code.strip(), "mermaid": {"theme": "default"}}, ensure_ascii=False)
+    b64 = base64.urlsafe_b64encode(state.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"https://mermaid.ink/img/{b64}?type=png"
+
+
+def transform_body(body: str, *, mermaid_supported: bool) -> str:
+    """平台不支持 mermaid 时，把 ```mermaid 图块替换为渲染好的架构图图片（图文并茂兜底）。"""
+    if mermaid_supported:
+        return body
+
+    def _sub(m: re.Match) -> str:
+        return f"![架构图]({mermaid_block_to_image_url(m.group(1))})"
+
+    return _MERMAID_RE.sub(_sub, body)
 
 
 def truncate(text: str, limit: int) -> str:
@@ -40,7 +63,7 @@ def make_variant(article: Article, platform: str) -> PlatformVariant:
         title=truncate(title, spec["title_max"]),
         summary=truncate(article.description, spec["summary_max"]),
         tags=article.tags[: spec["tags_max"]],
-        body=article.body,
+        body=transform_body(article.body, mermaid_supported=bool(spec.get("mermaid"))),
         article=article,
     )
 
@@ -69,6 +92,7 @@ class DryRunAdapter(PublishAdapter):
             "title": variant.title,
             "summary": variant.summary,
             "tags": variant.tags,
+            "cover": variant.article.cover,
             "body_md": variant.body,
             "source_article": str(variant.article.source_path),
             "ai_disclosure": True,

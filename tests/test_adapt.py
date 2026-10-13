@@ -62,3 +62,19 @@ def test_adapter_interface():
     from ghtrend.adapt import PublishAdapter
 
     assert issubclass(DryRunAdapter, PublishAdapter)
+
+
+def test_mermaid_transformed_per_platform():
+    from ghtrend.adapt import mermaid_block_to_image_url, transform_body
+
+    body = _article().body
+    # 支持平台（juejin/csdn）保留 mermaid 源码
+    assert "```mermaid" in make_variant(_article(), "juejin").body
+    assert "```mermaid" in transform_body(body, mermaid_supported=True)
+    # 不支持平台（zhihu/toutiao）替换为渲染图片链接
+    v = make_variant(_article(), "zhihu")
+    assert "```mermaid" not in v.body
+    assert v.body.count("![架构图](") == 1
+    url = mermaid_block_to_image_url("graph TD\n    A-->B")
+    assert url.startswith("https://mermaid.ink/img/")
+    assert "?type=png" in url

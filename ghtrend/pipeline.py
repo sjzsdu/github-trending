@@ -96,18 +96,24 @@ def step_archive(cfg: dict, workspace: Path) -> str:
 def step_select(cfg: dict, workspace: Path, limit: int) -> str:
     """归档里选题（去重 + 角度轮换），写 artifacts/selection.json。
 
-    limit 受 limits.daily_articles 约束：当日已生成文章数会占用每日预算，
-    预算耗尽则本步不产生新选题（提高 limit 也无法突破）。
+    每次 run 都挑 limit 个新 repo。daily_articles 在 config 中仅做信息性提示，
+    不再硬性卡选题——用户想要 run → 每次都挑都生成都发。
     """
-    daily_budget = int(cfg["limits"].get("daily_articles", limit))
+    daily_budget = int(cfg["limits"].get("daily_articles", 9999))
     made_today = len(list((workspace / cfg["paths"]["artifacts"]).glob(f"{_dt.date.today().isoformat()}/*.md")))
-    limit = max(0, min(limit, daily_budget - made_today))
-    if limit == 0:
-        return (f"daily article budget exhausted ({made_today}/{daily_budget} generated today); "
-                "no new topics selected")
+    actual_limit = limit
+    note = ""
+    if made_today >= daily_budget:
+        note = f"（已超 daily_articles={daily_budget} 配置，继续按 limit={limit} 选）"
     conn = archive_mod.connect(workspace / cfg["paths"]["archive_db"])
     try:
-        topics = archive_mod.select_topics(conn, cfg["angles"], limit=limit)
+        # 从快照取 stars/description，供角度路由（AI 类→use_case、高星→success_story…）
+        repo_meta: dict[str, dict] = {}
+        snap_dir = workspace / cfg["paths"]["snapshots"]
+        for f in sorted(snap_dir.glob("*.json"), reverse=True):  # 新快照优先
+            for r in scrape_mod.load_snapshot(f):
+                repo_meta.setdefault(r.repo, {"stars": r.stars, "description": r.description})
+        topics = archive_mod.select_topics(conn, cfg["angles"], limit=actual_limit, repo_meta=repo_meta)
     finally:
         conn.close()
     sel_path = workspace / cfg["paths"]["artifacts"] / "selection.json"
@@ -166,7 +172,7 @@ def step_enrich(cfg: dict, workspace: Path, *, mock: bool) -> str:
 
 
 def step_generate(cfg: dict, workspace: Path, *, mock: bool) -> str:
-    """逐 topic 生成文章 md（已存在则跳过，幂等）。"""
+    """逐 topic 生成文章 md（每次 run 都全新生成，版本化 slug 保证 publish_log 去重不拦截）。"""
     state = _load_state(cfg, workspace)
     lines = []
     for topic in state["topics"]:
@@ -174,11 +180,13 @@ def step_generate(cfg: dict, workspace: Path, *, mock: bool) -> str:
         if details is None:
             lines.append(f"{topic.repo}: skip (no enriched data; run enrich first)")
             continue
-        existing = sorted((workspace / cfg["paths"]["artifacts"]).glob(f"????-??-??/*_{topic.angle}.md"))
-        if any(topic.repo.replace("/", "-") in p.name for p in existing):
-            lines.append(f"{topic.repo}×{topic.angle}: cached ({existing[0].relative_to(workspace)})")
-            continue
         article = gen_mod.make_article(topic, details, cfg, mock=mock)
+        # 版本化 slug：同一天同一 repo+angle 重跑时加 -v2/-v3，保证每次 run 的 md 都是新 slug
+        base_dir = workspace / cfg["paths"]["artifacts"] / article.slug.split("_", 1)[0]
+        base_dir.mkdir(parents=True, exist_ok=True)
+        existing = sorted(base_dir.glob(f"{article.slug}*.md"))
+        if existing:
+            article.slug = f"{article.slug}-v{len(existing) + 1}"
         path = gen_mod.save_article(article, workspace / cfg["paths"]["artifacts"])
         article.source_path = str(path)
         lines.append(f"{topic.repo}×{topic.angle}: -> {path.relative_to(workspace)}")

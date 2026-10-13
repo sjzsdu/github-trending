@@ -33,10 +33,14 @@ def find_angle(cfg: dict, angle_id: str) -> dict:
 def build_messages(topic: SelectedTopic, details: RepoDetails, angle: dict, cfg: dict) -> list[dict]:
     """组装 prompt：角度 profile × repo 输入包。"""
     system = (
-        "你是一名资深技术专栏作者。严格遵守：\n"
-        "1. 只基于给定仓库材料写作，不编造事实与数字；\n"
-        "2. 正文包含一个 `## 架构一瞥` 小节，内含一块 ```mermaid graph TD 图；\n"
-        "3. 输出为 markdown 正文，不要输出 frontmatter（由流水线统一生成）。\n"
+        "你是一名一线工程师，在个人技术专栏写复盘文章，读者是同行开发者。写作铁律：\n"
+        "1. 只基于给定仓库材料写作，不编造事实与数字；材料中的命令、代码、数字必须原样引用；\n"
+        "2. 开头第一句直接切入项目本身，禁止“在当今/随着…的快速发展”式套话开场；\n"
+        "3. 结尾落到具体建议或明确判断，禁止“总而言之/综上所述/拭目以待”式空洞收束；\n"
+        "4. 以连贯段落叙述为主，少用罗列；不出现三层嵌套列表；\n"
+        "5. 说人话：长短句交替，允许口语化转折；禁用空洞形容词（强大/卓越/领先/惊艳）；\n"
+        "6. 正文包含一个 `## 架构一瞥` 小节，内含一块 ```mermaid graph TD 图；\n"
+        "7. 全文 900-1500 字；输出 markdown 正文，不要输出 frontmatter（由流水线统一生成）。\n"
     )
     user = (
         f"写作角度：{angle.get('name', angle['id'])}\n"
@@ -122,7 +126,8 @@ def make_article(
         title=f"{angle.get('name', topic.angle)}：{details.repo.split('/', 1)[1]}",
         description=details.description or details.repo,
         tags=tags,
-        cover="",  # v1：封面留空，后续接入生图
+        # GitHub 自动生成的社交卡片（含 repo 名/star 数），零成本保证图文并茂
+        cover=f"https://opengraph.githubassets.com/1/{details.repo}",
         canonical="",  # 自有站点出口就绪后回填
         body=(
             body.strip()

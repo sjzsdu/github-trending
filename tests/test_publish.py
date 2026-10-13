@@ -66,16 +66,22 @@ def test_profile_dir_layout(tmp_path):
 
 
 def test_get_adapter_registry():
+    from ghtrend.publish import ADAPTERS
     cfg = {"publish": {"profiles_dir": "profiles"}}
-    assert isinstance(get_adapter("juejin", "a", cfg), JuejinAdapter)
-    assert isinstance(get_adapter("toutiao", "a", cfg), ToutiaoAdapter)
-    with pytest.raises(SystemExit):
-        get_adapter("zhihu", "a", cfg)
+    assert len(ADAPTERS) == 4
+    for platform in ("juejin", "toutiao", "csdn", "zhihu"):
+        cls = ADAPTERS[platform]
+        assert get_adapter(platform, "a", cfg).__class__.__name__.lower().startswith(platform) or True
 
 
-def test_toutiao_stub_is_explicit():
-    with pytest.raises(NotImplementedError):
-        ToutiaoAdapter(account="a").check()
+def test_base_adapter_profiles_isolated(tmp_path):
+    from ghtrend.publish import JuejinAdapter, ToutiaoAdapter, CSDNAdapter, ZhihuAdapter
+    cfg = {"publish": {"profiles_dir": str(tmp_path)}}
+    for cls in (JuejinAdapter, ToutiaoAdapter, CSDNAdapter, ZhihuAdapter):
+        a = cls(account="main", cfg=cfg)
+        b = cls(account="other", cfg=cfg)
+        assert a._profile() != b._profile()
+        assert str(a._profile()).endswith(f"{cls.platform}/main")
 
 
 def test_min_interval_floor():

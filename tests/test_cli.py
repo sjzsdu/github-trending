@@ -41,7 +41,7 @@ def test_platform_requires_action():
 
 
 def test_unknown_platform_rejected():
-    err = validate_args(_parse("zhihu", "login"))
+    err = validate_args(_parse("wechat", "login"))
     assert err and "未知平台" in err
 
 
@@ -65,17 +65,17 @@ def test_platforms_registry():
     assert "juejin" in PLATFORMS
 
 
-def test_toutiao_stub_degrades_cleanly(capsys):
-    """toutiao stub 不得抛 traceback：三个动作都干净降级 exit 2。"""
-    for action in ("check", "login", "publish"):
-        argv = ["toutiao", action, "--account", "main"]
-        if action == "publish":
-            argv += ["--latest"]
+def test_all_platforms_instantiated(capsys):
+    """四个平台 adapter 都已接入（不再是 stub），CLI 不会因 NotImplementedError 崩溃。"""
+    from ghtrend.publish import ADAPTERS
+    for platform in ("juejin", "toutiao", "csdn", "zhihu"):
+        cls = ADAPTERS.get(platform)
+        assert cls is not None, f"{platform} 未注册"
+        argv = [platform, "check", "--account", "main"]
         code = main(argv)
         out = capsys.readouterr()
-        assert code == 2, f"{action} exit code"
-        assert "尚未接入" in out.err
-        assert "Traceback" not in out.err
+        # 未登录（profile 不存在）时 exit code 1，不会抛 NotImplementedError / 未知平台
+        assert "Traceback" not in out.err, f"{platform} 抛了 traceback"
 
 
 def test_effective_interval_floored_at_300():

@@ -108,15 +108,40 @@ def all_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+# 角度路由：按项目特征挑角度，而非固定从 intro 轮换
+_AI_HINTS = ("llm", "agent", " ai ", "gpt", "copilot", "rag", "模型", "智能", "助手", "assistant")
+
+
+def pick_angle(meta: dict, angle_ids: list[str], covered: set[str]) -> str | None:
+    """按项目特征路由角度；被路由角度已覆盖则回退到配置顺序的下一个未覆盖角度。
+
+    meta: {"stars": int, "description": str}（来自 trending 快照）
+    """
+    stars = int(meta.get("stars") or 0)
+    desc = f" {(meta.get('description') or '').lower()} "  # 补空格保证 " ai " 可命中
+    if any(h in desc for h in _AI_HINTS):
+        routed = "use_case"
+    elif stars >= 10000:
+        routed = "success_story"
+    elif stars >= 1000:
+        routed = "architecture"
+    else:
+        routed = "intro"
+    if routed in angle_ids and routed not in covered:
+        return routed
+    return next((aid for aid in angle_ids if aid not in covered), None)
+
+
 def select_topics(
     conn: sqlite3.Connection,
     angles: list[dict],
     limit: int = 1,
+    repo_meta: dict[str, dict] | None = None,
 ) -> list[SelectedTopic]:
-    """选题：过滤已覆盖 repo+angle，角度轮换，取前 limit 个。
+    """选题：过滤已覆盖 repo+angle，按项目特征路由角度（缺 meta 时退化为配置顺序轮换）。
 
-    angles: config 中的 angle profile 列表（[{"id": ..., "name": ...}, ...]），
-    顺序即轮换顺序。
+    angles: config 中的 angle profile 列表（[{"id": ..., "name": ...}, ...]）。
+    repo_meta: {repo: {"stars", "description", ...}}，来自当日 trending 快照。
     """
     angle_ids = [a["id"] for a in angles]
     angle_names = {a["id"]: a.get("name", a["id"]) for a in angles}
@@ -125,8 +150,11 @@ def select_topics(
         if len(topics) >= limit:
             break
         covered = set(json.loads(row["covered_angles"]))
-        # 角度轮换：在配置顺序中找该 repo 尚未覆盖的第一个角度
-        next_angle = next((aid for aid in angle_ids if aid not in covered), None)
+        if repo_meta:
+            next_angle = pick_angle(repo_meta.get(row["repo"], {}), angle_ids, covered)
+        else:
+            # 角度轮换（无特征信息时的兜底）
+            next_angle = next((aid for aid in angle_ids if aid not in covered), None)
         if next_angle is None:
             continue  # 全部角度写过的 repo 跳过
         topics.append(

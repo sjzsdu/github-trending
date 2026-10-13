@@ -68,6 +68,30 @@ def test_select_prefers_fewer_times_trending(tmp_path):
     assert topics[0].repo == "new/two"
 
 
+def test_pick_angle_routes_by_project_traits(tmp_path):
+    from ghtrend.archive import pick_angle
+
+    ids = [a["id"] for a in ANGLES]
+    # AI 类项目（description 命中关键词）→ use_case
+    assert pick_angle({"stars": 500, "description": "an LLM agent framework"}, ids, set()) == "use_case"
+    # 高星成熟项目 → success_story
+    assert pick_angle({"stars": 15000, "description": "a web server"}, ids, set()) == "success_story"
+    # 成长期项目 → architecture
+    assert pick_angle({"stars": 2000, "description": "a cli tool"}, ids, set()) == "architecture"
+    # 新面孔 → intro
+    assert pick_angle({"stars": 50, "description": "just a script"}, ids, set()) == "intro"
+    # 被路由角度已覆盖 → 回退到配置顺序的下一个未覆盖角度
+    assert pick_angle({"stars": 50, "description": "llm agent"}, ids, {"use_case"}) == "intro"
+
+
+def test_select_uses_repo_meta(tmp_path):
+    conn = _conn(tmp_path)
+    record_snapshot(conn, [_repo("big/star")])
+    meta = {"big/star": {"stars": 20000, "description": "a database"}}
+    topics = select_topics(conn, ANGLES, limit=1, repo_meta=meta)
+    assert topics[0].angle == "success_story"  # 高星项目直接路由到成功故事，不走 intro
+
+
 def test_mark_covered_persists_and_sets_url(tmp_path):
     conn = _conn(tmp_path)
     record_snapshot(conn, [_repo("a/b")])
