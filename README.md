@@ -39,7 +39,10 @@ pytest
 
 ```cron
 # crontab -e：每天 09:30 自动采集+生成+发布（掘金 draft）
-30 9 * * * cd /path/to/github-trending && GHTREND_LLM_API_KEY=sk-xxx GHTREND_GITHUB_TOKEN=ghp_xxx .venv/bin/python -m ghtrend.cli run --account main >> run.log 2>&1
+# key/token 放 ~/.ghtrend.env（chmod 600），不进 crontab、不进 git：
+#   GHTREND_LLM_API_KEY=sk-xxx
+#   GHTREND_GITHUB_TOKEN=ghp_xxx
+30 9 * * * set -a; . "$HOME/.ghtrend.env"; set +a; cd /path/to/github-trending && .venv/bin/python -m ghtrend.cli run --account main >> run.log 2>&1
 ```
 
 ```bash

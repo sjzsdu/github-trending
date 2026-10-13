@@ -112,12 +112,21 @@ def _log_publish(workspace: Path, platform: str, article: Article, mode: str, de
     path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _not_implemented(platform: str) -> int:
+    """stub 平台（如头条）统一干净降级：提示 + exit 2，不抛 traceback。"""
+    print(f"[{platform}] 头条 adapter 尚未接入" if platform == "toutiao"
+          else f"[{platform}] adapter 尚未接入", file=sys.stderr)
+    return 2
+
+
 def cmd_publish(cfg: dict, workspace: Path, args) -> int:
     adapter = get_adapter(args.platform, args.account, cfg)
     article = _pick_article(workspace, args)
     mode = args.mode or cfg.get("publish", {}).get("mode", "draft")
     try:
         outcome = adapter.publish(article, mode=mode)
+    except NotImplementedError:
+        return _not_implemented(args.platform)
     except NotLoggedInError as exc:
         print(f"[{args.platform}] 未登录：{exc}", file=sys.stderr)
         return 1
@@ -131,15 +140,27 @@ def cmd_publish(cfg: dict, workspace: Path, args) -> int:
 
 def cmd_check(cfg: dict, workspace: Path, args) -> int:
     adapter = get_adapter(args.platform, args.account, cfg)
-    ok, detail = adapter.check()
+    try:
+        ok, detail = adapter.check()
+    except NotImplementedError:
+        return _not_implemented(args.platform)
     print(f"[{args.platform}] {'已登录' if ok else '未登录'}: {detail}")
     return 0 if ok else 1
 
 
 def cmd_login(cfg: dict, workspace: Path, args) -> int:
     adapter = get_adapter(args.platform, args.account, cfg)
-    print(adapter.login())
+    try:
+        print(adapter.login())
+    except NotImplementedError:
+        return _not_implemented(args.platform)
     return 0
+
+
+def effective_interval(cfg: dict) -> int:
+    """平台发布间隔；风控下限 300s，配置更小也会被抬到下限。"""
+    return max(int(cfg.get("publish", {}).get("interval_seconds", MIN_PLATFORM_INTERVAL)),
+               MIN_PLATFORM_INTERVAL)
 
 
 def cmd_run(cfg: dict, workspace: Path, args) -> int:
@@ -164,8 +185,7 @@ def cmd_run(cfg: dict, workspace: Path, args) -> int:
     # 发布：逐平台，间隔 ≥5 分钟，失败隔离
     platforms = (args.platforms.split(",") if args.platforms
                  else cfg.get("publish", {}).get("platforms", ["juejin"]))
-    interval = max(int(cfg.get("publish", {}).get("interval_seconds", MIN_PLATFORM_INTERVAL)),
-                   MIN_PLATFORM_INTERVAL)
+    interval = effective_interval(cfg)
     mode = args.mode or cfg.get("publish", {}).get("mode", "draft")
     log = _publish_log(workspace)
     done_slugs = {(e["platform"], e["article"]) for e in log["published"]}

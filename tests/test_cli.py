@@ -2,7 +2,7 @@
 
 import pytest
 
-from ghtrend.cli import PLATFORMS, build_parser, validate_args
+from ghtrend.cli import PLATFORMS, build_parser, effective_interval, main, validate_args
 
 
 def _parse(*argv):
@@ -63,3 +63,31 @@ def test_action_choices_enforced():
 
 def test_platforms_registry():
     assert "juejin" in PLATFORMS
+
+
+def test_toutiao_stub_degrades_cleanly(capsys):
+    """toutiao stub 不得抛 traceback：三个动作都干净降级 exit 2。"""
+    for action in ("check", "login", "publish"):
+        argv = ["toutiao", action, "--account", "main"]
+        if action == "publish":
+            argv += ["--latest"]
+        code = main(argv)
+        out = capsys.readouterr()
+        assert code == 2, f"{action} exit code"
+        assert "尚未接入" in out.err
+        assert "Traceback" not in out.err
+
+
+def test_effective_interval_floored_at_300():
+    assert effective_interval({"publish": {"interval_seconds": 60}}) == 300
+    assert effective_interval({"publish": {"interval_seconds": 299}}) == 300
+    assert effective_interval({"publish": {"interval_seconds": 600}}) == 600
+    assert effective_interval({}) == 300  # 缺省也保底
+
+
+def test_effective_interval_used_by_run_wiring():
+    """cmd_run 的间隔取自 effective_interval（防止回归为裸读配置）。"""
+    import inspect
+    from ghtrend import cli
+
+    assert "effective_interval(cfg)" in inspect.getsource(cli.cmd_run)
