@@ -1,9 +1,9 @@
-"""文章生成（dry-run）：OpenAI 兼容端点 + 角度 prompt profile + --mock-llm。
+"""文章生成：OpenAI 兼容端点 + 角度 prompt profile + --mock-llm。
 
 输出 markdown：
   - frontmatter（title/description/tags/cover/canonical）
   - 正文中含 mermaid 架构图小节
-  - 尾部：GB 45438-2025 AI 生成内容声明 + repo 来源链接（调研结论 F5/F6）
+  - 尾部：GB 45438-2025 AI 生成内容声明 + repo 来源链接
 """
 
 from __future__ import annotations
@@ -23,6 +23,13 @@ AI_DISCLOSURE = (
 )
 
 
+def _ai_disclosure_enabled(cfg: dict) -> bool:
+    """是否在正文尾部附加 AI 生成声明。默认 True；用户可在 config.yaml 关掉。"""
+    pub = cfg.get("publish", {})
+    val = pub.get("include_ai_disclosure", pub.get("ai_disclosure", True))
+    return bool(val)
+
+
 def find_angle(cfg: dict, angle_id: str) -> dict:
     for a in cfg["angles"]:
         if a["id"] == angle_id:
@@ -31,17 +38,35 @@ def find_angle(cfg: dict, angle_id: str) -> dict:
 
 
 def build_messages(topic: SelectedTopic, details: RepoDetails, angle: dict, cfg: dict) -> list[dict]:
-    """组装 prompt：角度 profile × repo 输入包。"""
-    system = (
-        "你是一名一线工程师，在个人技术专栏写复盘文章，读者是同行开发者。写作铁律：\n"
-        "1. 只基于给定仓库材料写作，不编造事实与数字；材料中的命令、代码、数字必须原样引用；\n"
-        "2. 开头第一句直接切入项目本身，禁止“在当今/随着…的快速发展”式套话开场；\n"
-        "3. 结尾落到具体建议或明确判断，禁止“总而言之/综上所述/拭目以待”式空洞收束；\n"
-        "4. 以连贯段落叙述为主，少用罗列；不出现三层嵌套列表；\n"
-        "5. 说人话：长短句交替，允许口语化转折；禁用空洞形容词（强大/卓越/领先/惊艳）；\n"
-        "6. 正文包含一个 `## 架构一瞥` 小节，内含一块 ```mermaid graph TD 图；\n"
-        "7. 全文 900-1500 字；输出 markdown 正文，不要输出 frontmatter（由流水线统一生成）。\n"
-    )
+    """组装 prompt：固定专家身份 × 写作禁令 × 角度 × repo 材料。"""
+    system = """你是一名全栈开发工程师，懂架构、熟悉多门编程语言，也是技术布道师。你写的东西是给同行看的。
+
+写作铁律（每条都要做到）：
+
+【内容】
+- 不提任何仓库热度数据（stars/forks/issue 数/增长率）；假设读者已经知道这个项目值得看；
+- 只基于给定仓库材料写作，不编造事实；材料里的命令、代码、配置必须原样引用；
+- 读者读完应该得到一个可执行的东西（能跑起来 / 能做一个技术判断 / 能解决一个具体问题），不要写成项目介绍；
+
+【语气】
+- 第一句直接切入项目，禁止「在当今/随着…的快速发展」「人工智能的浪潮下」式套话开场；
+- 用第一人称，像你自己动手试过这个项目、踩过坑、有判断；
+- 长短句交替，允许口语化转折（「说实话」「有意思的是」「这里有个坑」），但不要装腔作势；
+- 结尾落在具体建议或明确判断，禁止「总而言之/综上所述/拭目以待」「让我们一起…」式空洞收束；
+
+【禁令】违反任何一条就重写：
+- 禁用空洞形容词：强大/卓越/领先/惊艳/颠覆/革命性/极其/非常（删或替换成具体描述）；
+- 禁用 meta 自述：「本文将」「接下来我们」「首先…其次…最后」「本文分为几个部分」；
+- 禁用机械三段式罗列（三个以上并列小标题）；
+- 禁用「值得注意的是」「需要指出的是」「不难发现」等提示性句式；
+- 不用 emoji 当段落装饰；
+- 不引用或解读任何 star/fork/issue 等 GitHub 数据。
+
+【格式】
+- 正文包含一个 `## 架构一瞥` 小节，内含一块 ```mermaid graph TD 图（模块关系，别画流程图）；
+- 全文 900-1500 字；连贯段落为主，少用罗列；
+- 输出 markdown 正文，不要输出 frontmatter（由流水线统一生成）。
+"""
     user = (
         f"写作角度：{angle.get('name', angle['id'])}\n"
         f"角度要求：{angle['prompt'].strip()}\n\n"
@@ -58,8 +83,7 @@ def mock_body(topic: SelectedTopic, details: RepoDetails, angle: dict) -> str:
     name = details.repo.split("/", 1)[1]
     return (
         f"# {angle.get('name', angle['id'])}：{name}\n\n"
-        f"> mock-llm 生成的演示文章（offline dry-run），仓库：[{details.repo}]({details.url})，"
-        f"当前 {details.stars} stars。\n\n"
+        f"> mock-llm 生成的演示文章（offline dry-run），仓库：[{details.repo}]({details.url})。\n\n"
         "## 项目是什么\n\n"
         f"{details.description}\n\n"
         "## 架构一瞥\n\n"
@@ -76,11 +100,7 @@ def mock_body(topic: SelectedTopic, details: RepoDetails, angle: dict) -> str:
 
 
 def call_llm(cfg: dict, messages: list[dict]) -> str:
-    """调用 OpenAI 兼容 /chat/completions（真实生成路径）。
-
-    key 经 config.resolve_llm_key 回退链解析；未配置时 fail-fast 并给出
-    可操作提示（离线测试用 --mock-llm）。
-    """
+    """调用 OpenAI 兼容 /chat/completions（真实生成路径）。"""
     from .config import require_llm_key
 
     llm = cfg["llm"]
@@ -126,14 +146,13 @@ def make_article(
         title=f"{angle.get('name', topic.angle)}：{details.repo.split('/', 1)[1]}",
         description=details.description or details.repo,
         tags=tags,
-        # GitHub 自动生成的社交卡片（含 repo 名/star 数），零成本保证图文并茂
         cover=f"https://opengraph.githubassets.com/1/{details.repo}",
-        canonical="",  # 自有站点出口就绪后回填
+        canonical="",
         body=(
             body.strip()
             + "\n\n---\n\n"
-            + f"**来源仓库**：[{details.repo}]({repo_url})\n\n"
-            + f"> {AI_DISCLOSURE}\n"
+            + f"**来源仓库**：[{details.repo}]({repo_url})\n"
+            + (f"\n> {AI_DISCLOSURE}\n" if _ai_disclosure_enabled(cfg) else "")
         ),
         meta={"times_trending": topic.times_trending, "mock": mock},
     )
@@ -162,7 +181,7 @@ def load_article_meta(path: str | Path) -> dict:
         elif ":" in line:
             k, v = line.split(":", 1)
             if v.strip() == "":
-                continue  # 列表型键（如 tags:）由后续缩进行填充
+                continue
             fm[k.strip()] = v.strip()
     fm["body"] = text[end + 3 :].strip()
     return fm

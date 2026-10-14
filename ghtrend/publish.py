@@ -34,6 +34,7 @@ class PublishOutcome:
     ok: bool
     mode: str  # draft / publish
     detail: str
+    url: str = ""   # 草稿箱或已发布文章的真实 URL（可空，部分平台无法拿到）
 
 
 def build_publish_payload(
@@ -184,7 +185,8 @@ class BaseBrowserAdapter(ABC):
                 ctx.close()
         return ok, detail
 
-    def publish(self, article: Article, mode: str = "draft") -> PublishOutcome:
+    def publish(self, article: Article, mode: str = "draft", review: bool = False) -> PublishOutcome:
+        self._review = review
         payload = build_publish_payload(
             article, self.platform, mode,
             max_tags=self.max_tags, category=self.category,
@@ -199,21 +201,109 @@ class BaseBrowserAdapter(ABC):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            ctx = self._open_context(p, headless=self.headless)
+            ctx = self._open_context(p, headless=(False if review else self.headless))
             try:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 if not self._is_logged_in(page):
                     raise NotLoggedInError("登录态已失效，请重新 login")
                 detail = self._submit(page, payload)
+                final_url = page.url
             finally:
                 ctx.close()
-        return PublishOutcome(self.platform, self.account, True, mode, detail)
+        return PublishOutcome(self.platform, self.account, True, mode, detail, url=final_url)
+
+    def publish_draft(self, url: str, article: Article | None = None,
+                      review: bool = False) -> PublishOutcome:
+        """从已保存的草稿直接发布（不重新填内容，打开草稿页点发布）。
+
+        仅支持保存后 URL 含草稿 ID 的平台（juejin / zhihu）；
+        toutiao/csdn 保存后 URL 不变，无法定位草稿，子类不覆写 _publish_existing
+        即走基类的 NotImplementedError 手动引导。
+
+        review=True 时强制有头浏览器、在最终发布按钮前暂停等你手动点击。
+        """
+        self._review = review
+        if not self._has_profile():
+            raise NotLoggedInError(
+                f"{self.platform} 账号 {self.account} 未登录：先运行 "
+                f"ghtrend {self.platform} login --account {self.account}"
+            )
+        _require_playwright()
+        from playwright.sync_api import sync_playwright
+
+        payload = None
+        if article is not None:
+            payload = build_publish_payload(
+                article, self.platform, "publish",
+                max_tags=self.max_tags, category=self.category,
+                ai_declaration=self.ai_declaration,
+            )
+        with sync_playwright() as p:
+            ctx = self._open_context(p, headless=(False if review else self.headless))
+            try:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                if not self._is_logged_in(page):
+                    raise NotLoggedInError("登录态已失效，请重新 login")
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
+                detail = self._publish_existing(page, payload)
+                final_url = page.url
+            finally:
+                ctx.close()
+        return PublishOutcome(self.platform, self.account, True, "publish", detail, url=final_url)
+
+    def _await_user_review(self, page, hint: str) -> str:
+        """暂停：浏览器保持打开，等用户在页面上手动点发布；按回车继续记录。"""
+        print(f"\n[{self.platform}] ⏸ 人工复核：{hint}")
+        print(f"    浏览器保持打开，请在页面上确认并点击发布按钮。")
+        try:
+            input(f"    完成后按回车关闭浏览器并记录结果  » ")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return "published (manual review)"
+
+    def _publish_existing(self, page, payload: dict | None) -> str:
+        """在已导航到草稿编辑页后点击发布。支持的平台覆写；默认手动引导。"""
+        raise NotImplementedError(
+            f"{self.platform} 保存草稿后 URL 不含草稿 ID，无法从草稿直接发布；"
+            f"请到 {PLATFORM_MANAGE_URLS.get(self.platform, self.home_url)} 手动点发布，"
+            f"或重新 ghtrend {self.platform} publish --mode publish"
+        )
 
     # ---- 子类实现：填充编辑器 + 发布弹窗 ----
 
     @abstractmethod
     def _submit(self, page, payload: dict) -> str:
         """打开编辑器、填标题/正文、处理 publish 弹窗。返回描述字符串。"""
+
+    def delete_article(self, url: str) -> str:
+        """删除一篇草稿/已发布文章。返回描述字符串（子类可覆写）。
+
+        用 headed context（危险操作，让用户看到确认弹窗更安全）。
+        """
+        if not self._has_profile():
+            raise NotLoggedInError(
+                f"{self.platform} 账号 {self.account} 未登录：先运行 "
+                f"ghtrend {self.platform} login --account {self.account}"
+            )
+        _require_playwright()
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            ctx = self._open_context(p, headless=False)  # headed：用户能看到确认弹窗
+            try:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                if not self._is_logged_in(page):
+                    raise NotLoggedInError("登录态已失效，请重新 login")
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
+                return self._do_delete(page, url)
+            finally:
+                ctx.close()
+
+    def _do_delete(self, page, url: str) -> str:
+        """在已导航到目标页面后执行删除。子类必须覆写。"""
+        raise NotImplementedError(f"{self.platform} delete 尚未实现，请手动到管理页删除")
 
 
 # ---------------------------------------------------------------------------
@@ -246,12 +336,15 @@ class JuejinAdapter(BaseBrowserAdapter):
         if payload["mode"] == "draft":
             return "draft saved"  # 新版编辑器 auto-save，无显式按钮
 
-        # publish：打开发布弹窗
+        return self._publish_dialog(page, payload)
+
+    def _publish_dialog(self, page, payload: dict) -> str:
+        """掘金发布弹窗：分类 → 标签 → 摘要 → 确定并发布。"""
         page.locator("button", has_text="发布").first.click()
         page.wait_for_timeout(2000)
 
         # 分类
-        if payload["category"]:
+        if payload.get("category"):
             cat = page.locator(f".category-list .item:has-text('{payload['category']}')")
             if cat.count() == 0:
                 cat = page.locator(f"[class*=category-list] .item:has-text('{payload['category']}')")
@@ -263,7 +356,7 @@ class JuejinAdapter(BaseBrowserAdapter):
 
         # 标签：搜索式选择器
         chosen = 0
-        for tag in payload["tags"]:
+        for tag in payload.get("tags", []):
             if chosen >= self.max_tags:
                 break
             try:
@@ -284,9 +377,56 @@ class JuejinAdapter(BaseBrowserAdapter):
         if summary_ta.count() > 0 and payload.get("summary"):
             summary_ta.fill(payload["summary"][:100])
 
+        if getattr(self, "_review", False):
+            return self._await_user_review(page, "掘金发布弹窗已填好分类/标签/摘要，请点「确定并发布」")
         page.locator("button", has_text="确定并发布").first.click()
         page.wait_for_timeout(3000)
         return "published"
+
+    def _publish_existing(self, page, payload: dict | None) -> str:
+        """草稿编辑页：内容已在，等编辑器就绪后直接走发布弹窗。"""
+        page.wait_for_selector(".title-input", timeout=30000)
+        page.wait_for_timeout(1000)
+        return self._publish_dialog(page, payload or {"category": self.category, "tags": [], "summary": ""})
+
+    def _do_delete(self, page, url: str) -> str:
+        """掘金：直接在草稿编辑器页找删除按钮 → 确认弹窗。"""
+        # url 已经是草稿编辑器页（juejin.cn/editor/drafts/<id>），找删除按钮
+        for sel in [
+            "button:has-text('删除')",
+            "a:has-text('删除')",
+            "[class*=delete]",
+            "[class*=more] button:has-text('删除')",
+        ]:
+            btn = page.locator(sel).first
+            if btn.count() > 0:
+                btn.click()
+                page.wait_for_timeout(1000)
+                break
+        else:
+            # 兜底：进创作中心文章管理
+            page.goto("https://juejin.cn/creator/content/article",
+                      wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(4000)
+            # 切到草稿 tab
+            for tab_text in ["草稿箱", "草稿"]:
+                tab = page.locator(f"a:has-text('{tab_text}'), button:has-text('{tab_text}')")
+                if tab.count() > 0:
+                    tab.first.click()
+                    page.wait_for_timeout(2000)
+                    break
+            btn = page.locator("button:has-text('删除'), a:has-text('删除')").first
+            if btn.count() == 0:
+                raise PublishError("掘金找不到删除按钮")
+            btn.click()
+            page.wait_for_timeout(1000)
+        # 确认弹窗
+        confirm = page.locator("button:has-text('确定'), button:has-text('确认删除'), "
+                               "button:has-text('确认'), [class*=confirm] button")
+        if confirm.count() > 0:
+            confirm.first.click()
+            page.wait_for_timeout(2000)
+        return "draft deleted"
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +492,23 @@ class ToutiaoAdapter(BaseBrowserAdapter):
             confirm.first.click()
             page.wait_for_timeout(3000)
         return "published"
+
+    def _do_delete(self, page, url: str) -> str:
+        """头条：进管理页草稿 tab → 每行删除按钮 → 确认弹窗。"""
+        page.goto("https://mp.toutiao.com/profile_v4/manage/draft",
+                  wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
+        # 每行的删除按钮是 a.op-button
+        del_btn = page.locator("a.op-button:has-text('删除'), a:has-text('删除')").first
+        if del_btn.count() == 0:
+            raise PublishError("头条草稿列表为空，找不到删除按钮")
+        del_btn.click()
+        page.wait_for_timeout(800)
+        confirm = page.locator("button:has-text('确定'), button:has-text('确认')")
+        if confirm.count() > 0:
+            confirm.first.click()
+            page.wait_for_timeout(2000)
+        return "draft deleted"
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +587,13 @@ class CSDNAdapter(BaseBrowserAdapter):
             page.wait_for_timeout(3000)
         return "published"
 
+    def _do_delete(self, page, url: str) -> str:
+        """CSDN 暂未接入：提示手动删除。"""
+        raise NotImplementedError(
+            "CSDN 删除暂未自动化，请手动到 "
+            "https://mp.csdn.net/mp_blog/manage/article 删除"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 知乎（zhuanlan.zhihu.com）
@@ -489,6 +653,28 @@ class ZhihuAdapter(BaseBrowserAdapter):
             confirm.first.click()
             page.wait_for_timeout(3000)
         return "published"
+
+    def _publish_existing(self, page, payload: dict | None) -> str:
+        """知乎草稿编辑页（zhuanlan.zhihu.com/p/<id>/edit）：内容已在，直接点发布。"""
+        page.wait_for_timeout(2000)
+        if getattr(self, "_review", False):
+            return self._await_user_review(page, "知乎草稿已打开，请在页面上点「发布」按钮")
+        pub = page.locator("button:has-text('发布'), button:has-text('发布文章')")
+        if pub.count() == 0:
+            raise PublishError("知乎草稿页找不到发布按钮")
+        pub.first.click()
+        page.wait_for_timeout(2000)
+        confirm = page.locator("button:has-text('确认发布'), button:has-text('确定发布'), button:has-text('发布')")
+        if confirm.count() > 0:
+            confirm.first.click()
+            page.wait_for_timeout(3000)
+        return "published"
+
+    def _do_delete(self, page, url: str) -> str:
+        """知乎暂未接入：提示手动删除。"""
+        raise NotImplementedError(
+            "知乎删除暂未自动化，请手动到知乎创作中心删除草稿"
+        )
 
 
 ADAPTERS = {
